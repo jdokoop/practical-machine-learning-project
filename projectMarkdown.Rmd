@@ -1,0 +1,85 @@
+---
+title: "Practical Machine Learning Project"
+output: html_document
+---
+
+In this project, we apply explore the use of random forests as a data classification technique in the context of human activity recognition. Namely, we use random forests with k-folds cross validation--as implemented in the caret package--to identify the manner in which a set of test subjects perform weight-lifting exercises, based on data from sensors located on the subject's arm, forearm, belt and dumbbell. The objective is to identify, given a set of data, the quality of execution of the exercise, as correct or as displaying one of four common mistakes. We find our approach to be reliable, with a very high out-of-sample accuracy.
+
+## Constructing the Model
+We begin by loading required libraries and data from file:
+```{r, results="hide"}
+  library(caret)
+
+  trainData <- read.csv("pml-training.csv", sep = ",", header = TRUE, na.strings = "NA")
+```
+
+If we inspect the columns in the *trainData* dataframe, or refer to the article [*Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.*], we find that it contains raw measurements of angles and acceleration from each sensor, as well as their derived variables such as the mean, standard deviation and kurtosis. 
+
+In order to construct the model, we select only the raw measurements, discarding any derived quantities. We also remove any other non-numerical columns such as ID and names. Finally, we select only rows of the data set with no missing values.
+
+```{r}
+  avgCovs <- grep("^avg",colnames(trainData))
+  varCovs <- grep("^var",colnames(trainData))
+  minCovs <- grep("^min",colnames(trainData))
+  maxCovs <- grep("^max",colnames(trainData))
+  skeCovs <- grep("^skewness",colnames(trainData))
+  kurCovs <- grep("^kurtosis",colnames(trainData))
+  stdCovs <- grep("^stddev",colnames(trainData))
+  ampCovs <- grep("^amplitude",colnames(trainData))
+  
+  aggCovs <- c(avgCovs,varCovs,minCovs,maxCovs,skeCovs,kurCovs,stdCovs,ampCovs)
+  aggData <- trainData[,-aggCovs]
+  aggData <- aggData[,-c(1:7)]
+  
+  aggData <- aggData[complete.cases(aggData),]
+```
+
+Inspecting the dimensions of the resulting dataset, we see that it is large enough, so as to split it into a training (75%) and a testing set (25%).
+
+```{r}
+  dim(aggData)
+```
+
+```{r}
+  inTrain <- createDataPartition(y=aggData$classe, p=0.75, list=FALSE)
+  training <- aggData[inTrain,]
+  testing <- aggData[-inTrain,]
+```
+
+Given the large number of covariates (i.e., 53), we choose to utilize a random forest for the prediction model. The advantage of random forests is that it uses bootstrapping to generate a set of **uncorrelated** trees, since only a random subset of covariates is used to generate each level of the tree. Therefore, the forest inherently entails a cross-validation scheme. Furthermore, to reduce the variance in the model, we apply a  layer of k-fold cross validation with *k*=5.
+
+Since building the model is computationally expensive, we save the model to file and load it if it exists.
+```{r}
+  if(file.exists("randm_forest_model.rda")){
+      load("randm_forest_model.rda")
+    } else{
+      ctrl <- trainControl(method="cv",number=5)
+      modFit <- train(classe ~ ., data=training, method="rf", trControl = ctrl, allowParallel=TRUE)
+      save(modFit, file = "randm_forest_model.rda")
+    }
+```
+
+We can now print some model parameters
+```{r}
+  print(modFit)
+```
+By inspecting the above output, we can estimate from the in-sample accuracy (~99%) that we should expect an out-of-sample error of order 1%. We test this in the following section.
+
+## Estimating Out-of-Sample Error
+
+Even though we used 5-fold cross validation to create the model, the error obtainable from this method is not truly an out-of-sample error since it hinges on the averaging of the entire training set. Hence, we turn to the 25% of the data we had reserved as a testing set, and print the confusion matrix:
+```{r}
+  testPred <- predict(modFit, testing)
+  confusionMatrix(testPred, testing$classe)
+```
+Overall, we see a very good performance of the model on the testing data, and we estimate the out-of-sample error to be the complement of the out-of-sample accuracy. Hence **ERROR = 1 - ACCURACY = 1-0.9982 = 0.0018 = 0.18**%, with good statistical significance as indicated by the very low p-value.
+
+## Applying Model to Grading Data
+Finally, we apply the constructed model to the 20 test cases in the data provided for grading submission, resulting in a vector of predictions:
+```{r}
+  gradeData <- read.csv("pml-testing.csv", sep = ",", header = TRUE, na.strings = "NA")
+  gradeData <- gradeData[,-aggCovs]
+  gradeData <- gradeData[,-c(1:7)]
+  gradePred <- predict(modFit, gradeData)
+  gradePred
+```
